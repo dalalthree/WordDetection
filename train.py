@@ -16,7 +16,99 @@ print('torchvision: ' + str(torchvision.__version__))
 
 #load Data
 
-def getBatch(batchSize):
+#Datasets and Loading
+
+class OmniglotTrainingSet(Dataset):
+    def __init__(self, path):
+        super(OmniglotTrainingSet, self).__init__()
+        self.seed = 1
+        np.random.seed(self.seed)
+        self.images, self.class_count = self.loadData(path)
+        
+    def loadData(self, path):
+        images = {} #stores all images loaded with identical character under one key
+        idCount = 0 #number of different character types
+        for primary in os.listdir(path): #language character comes from
+            for characterPath in os.listdir(os.path.join(path, primary)): #character type number
+                images[idCount] = []
+                for individualTest in os.listdir(os.path.join(path, primary, characterPath)): #each character image
+                    f_path = os.path.join(path, primary, characterPath, individualTest)
+                    images[idCount].append(Image.open(f_path))
+                idCount += 1
+        return images, idCount
+    
+    def __getitem__(self, i):
+        label, imgA, imgB = None, None, None
+        
+        # i ensures that theres a mix of same and different sets
+        
+        #same class
+        if i % 2 == 1:
+            label = torch.from_numpy(np.array([1.00], dtype=np.float32))
+            idClass = random.randint(0, self.class_count - 1)
+            imgA = random.choice(self.images[idClass])
+            imgB = random.choice(self.images[idClass])
+
+        #different class
+        else:
+            label = torch.from_numpy(np.array([0.00], dtype=np.float32))
+            idClassA, idClassB = random.randint(0, self.class_count - 1), random.randint(0, self.class_count - 1)
+            while idClassA == idClassB: #prevents same class
+                idClassB = random.randint(0, self.class_count - 1)
+            imgA = random.choice(self.images[idClassA])
+            imgB = random.choice(self.images[idClassB])
+        
+        return imgA, imgB, label
+    
+    def __len__(self):
+        return  21000000
+
+class OmniglotTestingSet(Dataset):
+    def __init__(self, path, numTests, way):
+        super(OmniglotTestingSet, self).__init__()
+        self.seed = 2
+        np.random.seed(self.seed)
+        self.images, self.class_count = self.loadData(path)
+        self.num_tests = numTests
+        self.way = way
+        self.classA, self.imgA = None, None #allows for n-way learning
+        
+    def loadData(self, path):
+        images = {} #stores all images loaded with identical character under one key
+        idCount = 0 #number of different character types
+        for primary in os.listdir(path): #language character comes from
+            for characterPath in os.listdir(os.path.join(path, primary)): #character type number
+                images[idCount] = []
+                for individualTest in os.listdir(os.path.join(path, primary, characterPath)): #each character image
+                    f_path = os.path.join(path, primary, characterPath, individualTest)
+                    images[idCount].append(Image.open(f_path))
+                idCount += 1
+        return images, idCount
+    
+    def __getitem__(self, i):
+        imgA, imgB = None, None
+        
+        # i ensures that theres a mix of same and different sets
+        
+        #same class
+        if i % self.way == 0:
+            self.classA = random.randint(0, self.class_count - 1)
+            self.imgA = random.choice(self.images[self.classA])
+            imgB = random.choice(self.images[self.classA])
+
+        #different class
+        else:
+            idClassB = random.randint(0, self.class_count - 1) #set B every time but A only n-way times
+            while self.classA == idClassB: #prevents same class
+                idClassB = random.randint(0, self.class_count - 1)
+            imgB = random.choice(self.images[self.classB])
+        
+        return self.imgA, imgB
+
+    def __len__(self):
+        return self.num_tests * self.way
+    
+    
 
 #Training Paramaters
 iterations = 10000
