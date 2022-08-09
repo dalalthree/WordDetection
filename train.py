@@ -2,39 +2,53 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 import torchvision
-import sys
+
 from IPython.display import display
 from PIL import Image
+
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+
+import numpy as np
+from numpy.random import choice
+
+import random
+import time
+from collections import deque
+
+import sys
+import os
 
 print('python: ' + str(sys.version))
 print('torch: ' + str(torch.__version__))
 print('torchvision: ' + str(torchvision.__version__))
 
-
-#load Data
-
 #Datasets and Loading
 
 class OmniglotTrainingSet(Dataset):
-    def __init__(self, path):
+    def __init__(self, path, transform = None):
         super(OmniglotTrainingSet, self).__init__()
         self.seed = 1
         np.random.seed(self.seed)
+        self.transform = transform
         self.images, self.class_count = self.loadData(path)
         
     def loadData(self, path):
         images = {} #stores all images loaded with identical character under one key
         idCount = 0 #number of different character types
-        for primary in os.listdir(path): #language character comes from
-            for characterPath in os.listdir(os.path.join(path, primary)): #character type number
-                images[idCount] = []
-                for individualTest in os.listdir(os.path.join(path, primary, characterPath)): #each character image
-                    f_path = os.path.join(path, primary, characterPath, individualTest)
-                    images[idCount].append(Image.open(f_path))
-                idCount += 1
+        for _ in range(4): #allows possibility of all 4 rotations even if its not guarenteed
+            for primary in os.listdir(path): #language character comes from
+                for characterPath in os.listdir(os.path.join(path, primary)): #character type number
+                    images[idCount] = []
+                    for individualTest in os.listdir(os.path.join(path, primary, characterPath)): #each character image
+                        f_path = os.path.join(path, primary, characterPath, individualTest)
+                        #images[idCount].append(Image.open(f_path))
+                        images[idCount].append(f_path)
+                    idCount += 1
         return images, idCount
     
     def __getitem__(self, i):
@@ -58,13 +72,19 @@ class OmniglotTrainingSet(Dataset):
             imgA = random.choice(self.images[idClassA])
             imgB = random.choice(self.images[idClassB])
         
+        imgA = Image.open(imgA).convert('L')
+        imgB = Image.open(imgB).convert('L')
+        
+        imgA = self.transform(imgA)
+        imgB = self.transform(imgB)
+        
         return imgA, imgB, label
     
     def __len__(self):
-        return  21000000
+        return  21000000 #5250000
 
 class OmniglotTestingSet(Dataset):
-    def __init__(self, path, numTests, way):
+    def __init__(self, path, numTests, way, transform=None):
         super(OmniglotTestingSet, self).__init__()
         self.seed = 2
         np.random.seed(self.seed)
@@ -72,6 +92,7 @@ class OmniglotTestingSet(Dataset):
         self.num_tests = numTests
         self.way = way
         self.classA, self.imgA = None, None #allows for n-way learning
+        self.transform = transform
         
     def loadData(self, path):
         images = {} #stores all images loaded with identical character under one key
@@ -81,7 +102,8 @@ class OmniglotTestingSet(Dataset):
                 images[idCount] = []
                 for individualTest in os.listdir(os.path.join(path, primary, characterPath)): #each character image
                     f_path = os.path.join(path, primary, characterPath, individualTest)
-                    images[idCount].append(Image.open(f_path))
+                    #images[idCount].append(Image.open(f_path))
+                    images[idCount].append(f_path)
                 idCount += 1
         return images, idCount
     
@@ -101,77 +123,39 @@ class OmniglotTestingSet(Dataset):
             idClassB = random.randint(0, self.class_count - 1) #set B every time but A only n-way times
             while self.classA == idClassB: #prevents same class
                 idClassB = random.randint(0, self.class_count - 1)
-            imgB = random.choice(self.images[self.classB])
+            imgB = random.choice(self.images[idClassB])
         
-        return self.imgA, imgB
+        imgA = Image.open(self.imgA).convert('L')
+        imgB = Image.open(imgB).convert('L')
+        
+        imgA = self.transform(imgA)
+        imgB = self.transform(imgB)
+        
+        return imgA, imgB 
 
     def __len__(self):
         return self.num_tests * self.way
-    
-    
 
-#Training Paramaters
-iterations = 10000
-batchSize = 180
-learningRate = 0.00006
-gradientDecay = 0.9
-gradientDecaySquare = 0.99
+ #Training Paramaters
+iterations = 7000
+batchSize = 100
+learningRate = 0.001 #0.00006
+way = 20
+modelPath = 'data/saved/models'
 
-#Train
+data_transforms = transforms.Compose([
+    transforms.RandomAffine(15),
+    transforms.ToTensor()
+])
 
-loss_function = torch.nn.BCEWithLogitsLoss()#default for size average is true
-loss_value = 0
+#Data preperations
 
-network = Siamese() #creates a new network
-network.to(device)
-network.train() #sets the mode of the network to training
+trainSet = OmniglotTrainingSet('./docs/omniglot/images_background/images_background/', transform=data_transforms)
+testSet = OmniglotTestingSet('./docs/omniglot/images_evaluation/images_evaluation/', transform=transforms.ToTensor(), numTests = 400, way = 20)
 
-optimizer = torch.optim.Adam(network.parameters(), lr = learningRate)
-optimizer.zero_grad() #zeros out the gradients
+testLoader = DataLoader(testSet, batch_size=way, shuffle=False, num_workers=0)
+trainLoader = DataLoader(trainSet, batch_size=batchSize, shuffle=False, num_workers=0)
 
-
-for i in range(iterations):
-    pair = getBatch('''insert files here''',batchSize) #gets an image pair
-    img1 = pair[0]
-    img2 = pair[1]
-    label = pair[2]
-    
-    optimizer.zero_grad() #zeros out the gradients since paramaters already updated with old gradient
-    
-    output = network.forward(img1, img2) #gets similarity probability
-    
-    loss = loss_function(output, label)
-    
-    lose += loss.item()
-    loss.backward() #computes the gradient of loss for all parameters
-    
-    optimizer.step() #updates parameters
-    
-    #print updates for the user
-    if i % 10 == 0:
-        print(f'{i} loss: {loss_value/10}')
-    if i % 100 = 0:
-        torch.save(network.state_dict(), f'{modelPath}/training-model-{i}.pt')
-        correct, wrong = 0, 0
-        for _, (testA, testB) in enumerate(testingSet, 1):
-            testA, testB = Variable(testA.cuda()), Variable(testB.cuda())
-            output = network.forward(testA, testB).data.cpu().numpy() #computes the probability
-            prediction = np.argmax(output) #gets the index of highest value in output
-            if prediction == 0:
-                correct += 1
-            else:
-                wrong += 1
-        print('-'*100)
-        print(f'{i} Testing Set Correct: {correct} Wrong: {wrong} Precision: {correct*1.0/(correct + error)}')
-        print('-'*100)
-
-#add final accuracies
-#
-#
-#
-#....................
-            
-            
 
 #Check GPU
 device = torch.device("cuda:" + str(torch.cuda.current_device()) if torch.cuda.is_available() else "cpu")
@@ -209,7 +193,7 @@ class Siamese(nn.Module):
         out2 = self.forward_one(x2)
         dis = torch.abs(out1 - out2)
         out = self.out(dis)
-        #  return self.sigmoid(out)
+        #return self.sigmoid(out)
         return out
     
 if __name__ == '__main__':
@@ -217,10 +201,102 @@ if __name__ == '__main__':
     print(net)
     
     
+ #Train
 
-#Test Image Loading
-Image(filename='./docs/cvl-database-1-1/trainset/pages/0001-1.png') 
+print('initializing training')
 
-#imgT = mpimg.imread('./docs/cvl-database-1-1/trainset/words/0050/0050-8-7-4-Usher.tif', 'r') 
-#imgT = mpimg.imread('./docs/cvl-database-1-1/trainset/lines/0001/IMG_3512.jpg', 'r') 
-#imgT = mpimg.imread('./docs/cvl-database-1-1/trainset/pages/0001-1.png') 
+loss_function = torch.nn.BCEWithLogitsLoss()#default for size average is true
+loss_value = 0
+loss_values = []
+
+network = Siamese() #creates a new network
+network.to(device)
+network.train() #sets the mode of the network to training
+
+optimizer = torch.optim.Adam(network.parameters(), lr = learningRate)
+optimizer.zero_grad() #zeros out the gradients
+
+accuracies = []
+a_assist = []
+
+start_time = time.time()
+initial_start_time = start_time
+print('starting training loop')
+for i, (imgA, imgB, label) in enumerate(trainLoader, start=1):
+    if i > iterations:
+        break
+        
+    
+    
+    imgA = Variable(imgA.cuda())
+    imgB = Variable(imgB.cuda())
+    label = Variable(label.cuda())
+    
+    optimizer.zero_grad() #zeros out the gradients since paramaters already updated with old gradient
+    
+    output = network.forward(imgA, imgB) #gets similarity probability
+    
+    loss = loss_function(output, label)
+    
+    li = loss.item()
+    
+    loss_value += li
+    loss_values.append(li)
+    loss.backward() #computes the gradient of loss for all parameters
+    
+    optimizer.step() #updates parameters
+    
+    #print updates for the user
+    if i % 10 == 0:
+        print(f'{i} loss: {loss_value/10} time elapsed: {time.time()-start_time}')
+        loss_value = 0
+        start_time = time.time()
+        if i % 100 == 0:
+            correct, wrong = 0, 0
+            for _, (testA, testB) in enumerate(testLoader, 1):
+
+                testA, testB = Variable(testA.cuda()), Variable(testB.cuda())
+                output = network.forward(testA, testB).data.cpu().numpy() #computes the probability
+                prediction = np.argmax(output) #gets the index of highest value in output
+                if prediction == 0:
+                    correct += 1
+                else:
+                    wrong += 1
+
+            print('-'*100)
+            print(f'{i} Testing Set Correct: {correct} Wrong: {wrong} Precision: {correct*1.0/(correct + wrong)}')
+            print('-'*100)
+            accuracies.append(correct*1.0/(correct+wrong))
+            a_assist.append(i)
+            if i % 10000 == 0:
+                torch.save(network.state_dict(), f'{modelPath}/training-model-{i}.pt')
+
+
+print('finish training loop, time elapsed: ', str(time.time()-initial_start_time))
+    
+#add final accuracies
+accuracy = 0.0
+counter = 0
+for d in accuracies:
+    print(d)
+    accuracy += d
+    counter += 1
+print("#"*100)
+print("final accuracy: ", accuracy/counter)
+    
+
+#define subplots
+fig, ax = plt.subplots(2, 1, figsize=(15,20))
+#fig.tight_layout()
+
+#create subplots
+ax[0].plot(range(1, iterations + 1), loss_values, color='red')
+ax[0].set_title('Loss Values During Training')
+ax[0].set_ylabel('Loss Value')
+ax[0].set_xlabel('Epoch')
+ax[1].plot(a_assist, accuracies, color='blue')
+ax[1].set_title('Accuracies During Training')
+ax[1].set_ylabel('Accuracies')
+ax[1].set_xlabel('Epoch')
+
+
